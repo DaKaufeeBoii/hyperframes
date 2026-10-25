@@ -44,4 +44,55 @@ describe("applyDotEnv", () => {
     applyDotEnv("GEMINI_API_KEY=project", env, []);
     expect(env).toEqual({});
   });
+
+  it("preserves quoted multiline values like JSON service accounts", () => {
+    const env: NodeJS.ProcessEnv = {};
+    const serviceAccountJson = `{\n  "type": "service_account",\n  "project_id": "test-project"\n}`;
+    const dotEnvContent = `HYPERFRAMES_VERTEX_SERVICE_ACCOUNT="${serviceAccountJson}"\nNEXT_KEY=value\n`;
+    applyDotEnv(dotEnvContent, env);
+    expect(env).toEqual({
+      HYPERFRAMES_VERTEX_SERVICE_ACCOUNT: serviceAccountJson,
+      NEXT_KEY: "value",
+    });
+  });
+
+  it("preserves single-quoted multiline strings across lines", () => {
+    const env: NodeJS.ProcessEnv = {};
+    const multilineText = `first line\nsecond line\nthird line`;
+    applyDotEnv(`MULTILINE_VAL='${multilineText}'\nFOO=bar`, env);
+    expect(env).toEqual({
+      MULTILINE_VAL: multilineText,
+      FOO: "bar",
+    });
+  });
+
+  it("preserves multiline RSA certificates or private keys", () => {
+    const env: NodeJS.ProcessEnv = {};
+    const pemKey = `-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQC6\n-----END PRIVATE KEY-----`;
+    applyDotEnv(`PRIVATE_KEY="${pemKey}"\nOTHER=yes`, env);
+    expect(env).toEqual({
+      PRIVATE_KEY: pemKey,
+      OTHER: "yes",
+    });
+  });
+
+  it("handles multiline quoted values with escaped quotes and inline comments", () => {
+    const env: NodeJS.ProcessEnv = {};
+    const payload = `line1\nline2 with \\"escaped quotes\\"\nline3`;
+    applyDotEnv(`CONF="${payload}" # trailing comment\nBAR=baz`, env);
+    expect(env).toEqual({
+      CONF: payload,
+      BAR: "baz",
+    });
+  });
+
+  it("handles CRLF line breaks in multiline values", () => {
+    const env: NodeJS.ProcessEnv = {};
+    const content = 'MULTI="first\r\nsecond\r\nthird"\r\nNEXT=val';
+    applyDotEnv(content, env);
+    expect(env).toEqual({
+      MULTI: "first\nsecond\nthird",
+      NEXT: "val",
+    });
+  });
 });

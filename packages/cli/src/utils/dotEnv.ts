@@ -13,24 +13,81 @@ export const CAPTURE_ENV_KEYS = [
   "HYPERFRAMES_VISION_TIMEOUT_MS",
 ];
 
-// A quoted value ends at its closing quote; unquoted, `#` starts a comment only after whitespace, so `pass#word` stays.
-function valueOf(raw: string): string {
-  const quote = raw.charAt(0);
-  if (quote === '"' || quote === "'") {
-    const end = raw.indexOf(quote, 1);
-    return end > 0 ? raw.slice(1, end) : raw.slice(1);
+function getUnescapedQuoteIndices(str: string, quote: string, fromIndex = 0): number[] {
+  const indices: number[] = [];
+  for (let i = fromIndex; i < str.length; i++) {
+    if (str[i] === quote) {
+      if (quote === '"' && i > 0 && str[i - 1] === "\\") {
+        let backslashes = 0;
+        let j = i - 1;
+        while (j >= 0 && str[j] === "\\") {
+          backslashes++;
+          j--;
+        }
+        if (backslashes % 2 === 1) continue;
+      }
+      indices.push(i);
+    }
   }
-  const comment = raw.match(/\s+#/);
-  return comment?.index === undefined ? raw : raw.slice(0, comment.index).trim();
+  return indices;
 }
 
-function entryOf(rawLine: string): [string, string] | null {
-  let line = rawLine.trim();
-  if (!line || line.startsWith("#")) return null;
-  if (line.startsWith("export ")) line = line.slice(7).trim();
-  const eq = line.indexOf("=");
-  if (eq < 1) return null;
-  return [line.slice(0, eq).trim(), valueOf(line.slice(eq + 1).trim())];
+function parseDotEnvEntries(content: string): [string, string][] {
+  const entries: [string, string][] = [];
+  const lines = content.split(/\r?\n/);
+  let i = 0;
+  while (i < lines.length) {
+    const rawLine = lines[i];
+    i++;
+    if (rawLine === undefined) break;
+    let line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    if (line.startsWith("export ")) line = line.slice(7).trim();
+    const eq = line.indexOf("=");
+    if (eq < 1) continue;
+    const key = line.slice(0, eq).trim();
+    const rawVal = line.slice(eq + 1).trim();
+
+    const quote = rawVal.charAt(0);
+    if (quote === '"' || quote === "'") {
+      const rawQuoteIndices = getUnescapedQuoteIndices(rawVal, quote, 1);
+      const lastRawIdx = rawQuoteIndices.length > 0 ? rawQuoteIndices[rawQuoteIndices.length - 1] : undefined;
+      const rawRemainder = lastRawIdx !== undefined ? rawVal.slice(lastRawIdx + 1).trim() : null;
+
+      if (
+        lastRawIdx !== undefined &&
+        rawRemainder !== null &&
+        (rawRemainder === "" || rawRemainder.startsWith("#")) &&
+        rawQuoteIndices.length % 2 === 1
+      ) {
+        entries.push([key, rawVal.slice(1, lastRawIdx)]);
+      } else {
+        let val = rawVal.slice(1);
+        while (i < lines.length) {
+          const next = lines[i];
+          i++;
+          if (next === undefined) break;
+          const nextQuoteIndices = getUnescapedQuoteIndices(next, quote, 0);
+          if (nextQuoteIndices.length % 2 === 1) {
+            const endIdx = nextQuoteIndices[nextQuoteIndices.length - 1];
+            if (endIdx !== undefined) {
+              const remainder = next.slice(endIdx + 1).trim();
+              if (remainder === "" || remainder.startsWith("#")) {
+                val += "\n" + next.slice(0, endIdx);
+                break;
+              }
+            }
+          }
+          val += "\n" + next;
+        }
+        entries.push([key, val]);
+      }
+    } else {
+      const comment = rawVal.match(/\s+#/);
+      entries.push([key, comment?.index === undefined ? rawVal : rawVal.slice(0, comment.index).trim()]);
+    }
+  }
+  return entries;
 }
 
 // Never over a key already set, and never the feedback email in any letter case (Windows env names are case-blind):
@@ -42,9 +99,7 @@ export function applyDotEnv(
   allowedKeys?: readonly string[],
 ): void {
   const allowed = allowedKeys === undefined ? undefined : new Set(allowedKeys);
-  for (const entry of content.split("\n").map(entryOf)) {
-    if (!entry) continue;
-    const [key, value] = entry;
+  for (const [key, value] of parseDotEnvEntries(content)) {
     if (
       key &&
       key.toUpperCase() !== FEEDBACK_EMAIL_ENV &&
